@@ -110,6 +110,16 @@
   .weather .rain { font-size: 14px; color: var(--muted); }
   .rain-tip { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--water-soft); font-size: 14px; }
 
+  /* Plant camera */
+  .cam-advice { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; }
+  .cam-advice .score { font-family: var(--serif); font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .cam-advice .score small { font-size: 18px; font-weight: 400; color: var(--muted); }
+  .cam-advice .meta { font-size: 14px; color: var(--muted); }
+  .cam-row { display: flex; gap: 10px; }
+  .btn-cam { background: var(--water-soft); color: var(--water); flex: 1; }
+  .btn-cam-quiet { background: none; border: 1px solid var(--line); color: var(--ink); }
+  .cam-note { min-height: 20px; margin-top: 10px; font-size: 14px; color: var(--muted); }
+
   footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
 
   /* Settings */
@@ -178,6 +188,16 @@
     <div id="weather"><div class="empty">Waiting for the controller to report.</div></div>
   </section>
 
+  <section>
+    <h2>Plant camera</h2>
+    <div id="camAdvice"><div class="empty">No check yet.</div></div>
+    <div class="cam-row">
+      <button class="btn btn-cam" id="camCheckBtn" disabled>Check now</button>
+      <button class="btn btn-cam-quiet" id="camUpdateBtn" disabled>Update</button>
+    </div>
+    <div class="cam-note" id="camNote" aria-live="polite"></div>
+  </section>
+
   <footer id="footer">
     <span>Scheduled watering runs every evening.</span>
   </footer>
@@ -209,10 +229,12 @@
   const T = {
     pumpCmd: 'garden/pump/cmd', pumpState: 'garden/pump/state',
     feedCmd: 'garden/nutrient/cmd', feedState: 'garden/nutrient/state',
-    online: 'garden/online', status: 'garden/status'
+    online: 'garden/online', status: 'garden/status',
+    camTrigger: 'garden/camera/trigger', camStatus: 'garden/camera/status', camAdvice: 'garden/camera/advice'
   };
   const RING = 2 * Math.PI * 106;
   const $ = id => document.getElementById(id);
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   const store = {
     get: k => { try { return localStorage.getItem('garden.' + k); } catch (e) { return null; } },
@@ -224,7 +246,8 @@
     conn: 'setup', connErr: '',
     online: null, pump: null, feed: null, status: null, statusAt: 0,
     pumpEnds: 0, pumpTotal: 0, feedEnds: 0,
-    pumpPending: 0, feedPending: 0
+    pumpPending: 0, feedPending: 0,
+    cam: null, camAdvice: null, camTrigger: ''
   };
   let client = null;
 
@@ -279,6 +302,12 @@
         if (text !== 'running') s.feedEnds = 0;
       } else if (topic === T.status) {
         try { s.status = JSON.parse(text); s.statusAt = Date.now(); } catch (e) {}
+      } else if (topic === T.camStatus) {
+        try { s.cam = JSON.parse(text); } catch (e) {}
+      } else if (topic === T.camAdvice) {
+        try { s.camAdvice = JSON.parse(text); } catch (e) {}
+      } else if (topic === T.camTrigger) {
+        s.camTrigger = text.trim();
       }
       render();
     });
@@ -287,6 +316,14 @@
   function send(topic, msg) {
     if (!client || !client.connected) return false;
     client.publish(topic, msg, { qos: 1, retain: false });
+    return true;
+  }
+
+  // The camera is asleep most of the time, so its requests are retained
+  // until it wakes up and clears them.
+  function sendRetained(topic, msg) {
+    if (!client || !client.connected) return false;
+    client.publish(topic, msg, { qos: 1, retain: true });
     return true;
   }
 
@@ -309,6 +346,15 @@
       const sec = +feedSlider.value;
       if (send(T.feedCmd, 'RUN:' + sec)) { s.feedPending = Date.now(); s.feedEnds = Date.now() + sec * 1000; render(); }
     }
+  });
+
+  $('camCheckBtn').addEventListener('click', () => {
+    const cmd = s.camTrigger ? '' : 'check';   // tapping again cancels a waiting request
+    if (sendRetained(T.camTrigger, cmd)) { s.camTrigger = cmd; render(); }
+  });
+
+  $('camUpdateBtn').addEventListener('click', () => {
+    if (sendRetained(T.camTrigger, 'update')) { s.camTrigger = 'update'; render(); }
   });
 
   // ---------- Settings ----------
@@ -337,6 +383,7 @@
     ['host', 'user', 'pass'].forEach(store.del);
     if (client) { client.end(true); client = null; }
     s.conn = 'setup'; s.online = s.pump = s.feed = s.status = null;
+    s.cam = s.camAdvice = null; s.camTrigger = '';
     $('fHost').value = $('fUser').value = $('fPass').value = '';
     $('fErr').textContent = 'Details removed from this phone.';
     render();
@@ -448,6 +495,25 @@
     } else if (st) {
       w.innerHTML = '<div class="empty">The controller has no weather data right now.</div>';
     }
+
+    // Plant camera
+    const ca = s.camAdvice;
+    if (ca) {
+      $('camAdvice').innerHTML = '<div class="cam-advice"><span class="score">' + esc(ca.health || '–') + '<small>/10</small></span>' +
+        '<span><div>Water: ' + esc(ca.water) + ' · Feed: ' + esc(ca.feed) + '</div>' +
+        '<div class="meta">' + esc(ca.date) + ' · ' + esc(ca.confidence) + ' confidence</div></span></div>';
+    }
+    const pending = s.camTrigger;
+    const cb = $('camCheckBtn'), ub = $('camUpdateBtn');
+    cb.disabled = !live;
+    ub.disabled = !live || !!pending;
+    cb.textContent = pending ? 'Cancel request' : 'Check now';
+    let camNote = '';
+    if (pending === 'check') camNote = 'Waiting for the camera to wake (up to 15 min). The advice will arrive on ntfy.';
+    else if (pending === 'update') camNote = 'Waiting for the camera to wake. ntfy will tell you when the update window opens.';
+    else if (s.cam) camNote = 'Camera ' + s.cam.state + ' · last seen ' + s.cam.time + ' · last check ' + s.cam.last_check;
+    else if (live) camNote = 'No word from the camera yet.';
+    $('camNote').textContent = camNote;
 
     // Footer
     const f = [];
