@@ -119,6 +119,7 @@
   .btn-cam { background: var(--water-soft); color: var(--water); flex: 1; }
   .btn-cam-quiet { background: none; border: 1px solid var(--line); color: var(--ink); }
   .cam-note { min-height: 20px; margin-top: 10px; font-size: 14px; color: var(--muted); }
+  .link-btn { background: none; border: none; padding: 0; margin-left: 6px; font: inherit; color: var(--water); text-decoration: underline; cursor: pointer; }
 
   footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
 
@@ -195,7 +196,7 @@
       <button class="btn btn-cam" id="camCheckBtn" disabled>Check now</button>
       <button class="btn btn-cam-quiet" id="camUpdateBtn" disabled>Update</button>
     </div>
-    <div class="cam-note" id="camNote" aria-live="polite"></div>
+    <div class="cam-note"><span id="camNote" aria-live="polite"></span><button class="link-btn" id="camCancel" hidden>Cancel</button></div>
   </section>
 
   <footer id="footer">
@@ -349,8 +350,12 @@
   });
 
   $('camCheckBtn').addEventListener('click', () => {
-    const cmd = s.camTrigger ? '' : 'check';   // tapping again cancels a waiting request
-    if (sendRetained(T.camTrigger, cmd)) { s.camTrigger = cmd; render(); }
+    if (s.camTrigger) return;   // already waiting - repeat taps do nothing
+    if (sendRetained(T.camTrigger, 'check')) { s.camTrigger = 'check'; render(); }
+  });
+
+  $('camCancel').addEventListener('click', () => {
+    if (sendRetained(T.camTrigger, '')) { s.camTrigger = ''; render(); }
   });
 
   $('camUpdateBtn').addEventListener('click', () => {
@@ -501,17 +506,18 @@
     if (ca) {
       $('camAdvice').innerHTML = '<div class="cam-advice"><span class="score">' + esc(ca.health || '–') + '<small>/10</small></span>' +
         '<span><div>Water: ' + esc(ca.water) + ' · Feed: ' + esc(ca.feed) + '</div>' +
-        '<div class="meta">' + esc(ca.date) + ' · ' + esc(ca.confidence) + ' confidence</div></span></div>';
+        '<div class="meta">' + esc(ca.date) + (ca.time ? ' ' + esc(ca.time) : '') + ' · ' + esc(ca.confidence) + ' confidence</div></span></div>';
     }
     const pending = s.camTrigger;
     const cb = $('camCheckBtn'), ub = $('camUpdateBtn');
-    cb.disabled = !live;
+    cb.disabled = !live || !!pending;
     ub.disabled = !live || !!pending;
-    cb.textContent = pending ? 'Cancel request' : 'Check now';
+    cb.textContent = pending === 'check' ? 'Waiting…' : 'Check now';
+    $('camCancel').hidden = !pending;
     let camNote = '';
     if (pending === 'check') camNote = 'Waiting for the camera to wake (up to 15 min). The advice will arrive on ntfy.';
     else if (pending === 'update') camNote = 'Waiting for the camera to wake. ntfy will tell you when the update window opens.';
-    else if (s.cam) camNote = 'Camera ' + s.cam.state + ' · last seen ' + s.cam.time + ' · last check ' + s.cam.last_check;
+    else if (s.cam) camNote = 'Camera ' + s.cam.state + ' · last seen ' + s.cam.time + ' · last check ' + s.cam.last_check + (s.cam.fw ? ' · v' + s.cam.fw : '');
     else if (live) camNote = 'No word from the camera yet.';
     $('camNote').textContent = camNote;
 
