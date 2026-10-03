@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Garden</title>
+<meta name="theme-color" content="#1D3527">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Garden">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #E6EDDF;
+    --surface: #F5F8F1;
+    --ink: #1D3527;
+    --muted: #5E7465;
+    --line: #C9D6C1;
+    --water: #2B78B5;
+    --water-soft: #D4E6F3;
+    --feed: #9A6B12;
+    --feed-soft: #F1E4C4;
+    --ok: #3E8E4F;
+    --bad: #B5412F;
+    --serif: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --sans: 'Instrument Sans', -apple-system, 'Segoe UI', Roboto, sans-serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #13211A; --surface: #1B2E24; --ink: #E3EEE3; --muted: #9DB3A2; --line: #2C4536;
+      --water: #5AA7E0; --water-soft: #1C3445; --feed: #E0AE4A; --feed-soft: #3A3120;
+      --ok: #6CC27D; --bad: #E77A66;
+    }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font-family: var(--sans); font-size: 16px; line-height: 1.45; -webkit-tap-highlight-color: transparent; }
+  main { max-width: 440px; margin: 0 auto; padding: 16px 20px 32px; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 0 4px; }
+  header h1 { font-family: var(--serif); font-weight: 600; font-size: 28px; margin: 0; flex: 1; letter-spacing: -0.01em; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  .dot.wait { background: var(--feed); animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+  .icon-btn { background: none; border: 1px solid var(--line); color: var(--ink); width: 40px; height: 40px; border-radius: 12px; font-size: 18px; cursor: pointer; }
+
+  /* Hero: the watering dial */
+  .hero { display: flex; flex-direction: column; align-items: center; padding: 20px 0 8px; }
+  .dial { position: relative; width: 228px; height: 228px; border: none; background: none; padding: 0; cursor: pointer; color: var(--ink); }
+  .dial:disabled { cursor: not-allowed; opacity: 0.45; }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+  .dial .track { stroke: var(--line); }
+  .dial .prog { stroke: var(--water); transition: stroke-dashoffset 0.9s linear; }
+  .dial .face {
+    position: absolute; inset: 18px; border-radius: 50%; background: var(--water-soft);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transition: background 0.3s;
+  }
+  .dial.running .face { background: var(--surface); }
+  .dial.running.indeterminate .prog { animation: spin 2.4s linear infinite; transform-origin: center; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .dial .big { font-family: var(--serif); font-size: 44px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .dial .small { font-size: 14px; color: var(--muted); margin-top: 8px; }
+  .hero-note { min-height: 22px; margin-top: 12px; font-size: 14px; color: var(--muted); text-align: center; }
+  .hero-note.warn { color: var(--bad); }
+
+  .slider { width: 100%; margin-top: 8px; }
+  .slider-head { display: flex; justify-content: space-between; font-size: 14px; color: var(--muted); }
+  .slider-head strong { color: var(--ink); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--water); height: 32px; }
+  .feed input[type=range] { accent-color: var(--feed); }
+
+  section { border-top: 1px solid var(--line); padding: 20px 0; }
+  section h2 { font-family: var(--serif); font-weight: 400; font-size: 20px; margin: 0 0 12px; }
+
+  /* Feed */
+  .feed-row { display: flex; align-items: center; gap: 12px; }
+  .feed-row .slider { flex: 1; margin: 0; }
+  .btn { font: 600 16px var(--sans); border: none; border-radius: 14px; padding: 14px 18px; cursor: pointer; min-width: 112px; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-feed { background: var(--feed-soft); color: var(--feed); }
+  .btn-feed.running { background: var(--feed); color: var(--surface); }
+
+  /* Pots */
+  .pots { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 4px; }
+  .pot { flex: 0 0 64px; text-align: center; font-size: 13px; color: var(--muted); }
+  .pot.stale { opacity: 0.45; }
+  .gauge { height: 96px; width: 40px; margin: 0 auto 8px; border-radius: 10px 10px 16px 16px; background: var(--surface); border: 1px solid var(--line); position: relative; overflow: hidden; }
+  .gauge span { position: absolute; left: 0; right: 0; bottom: 0; background: var(--water); opacity: 0.8; transition: height 0.6s; }
+  .pot b { display: block; color: var(--ink); font-size: 16px; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); font-size: 14px; }
+
+  /* Weather */
+  .weather { display: flex; align-items: baseline; gap: 14px; }
+  .weather .temp { font-family: var(--serif); font-size: 40px; font-weight: 600; line-height: 1; }
+  .weather .sky { font-size: 15px; }
+  .weather .rain { font-size: 14px; color: var(--muted); }
+  .rain-tip { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--water-soft); font-size: 14px; }
+
+  /* Plant camera */
+  .cam-advice { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; }
+  .cam-advice .score { font-family: var(--serif); font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .cam-advice .score small { font-size: 18px; font-weight: 400; color: var(--muted); }
+  .cam-advice .meta { font-size: 14px; color: var(--muted); }
+  .cam-row { display: flex; gap: 10px; }
+  .btn-cam { background: var(--water-soft); color: var(--water); flex: 1; }
+  .btn-cam-quiet { background: none; border: 1px solid var(--line); color: var(--ink); }
+  .cam-note { min-height: 20px; margin-top: 10px; font-size: 14px; color: var(--muted); }
+  .link-btn { background: none; border: none; padding: 0; margin-left: 6px; font: inherit; color: var(--water); text-decoration: underline; cursor: pointer; }
+
+  footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+
+  /* Settings */
+  dialog { border: none; border-radius: 20px; padding: 24px; width: min(92vw, 400px); background: var(--surface); color: var(--ink); }
+  dialog::backdrop { background: rgba(10, 25, 15, 0.5); }
+  dialog h2 { font-family: var(--serif); font-weight: 600; margin: 0 0 6px; font-size: 22px; }
+  dialog p { margin: 0 0 16px; font-size: 14px; color: var(--muted); }
+  label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 12px; }
+  label input { display: block; width: 100%; margin-top: 4px; font: 16px var(--sans); padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .dialog-actions { display: flex; gap: 10px; margin-top: 8px; }
+  .btn-primary { background: var(--ink); color: var(--surface); flex: 1; }
+  .btn-quiet { background: none; color: var(--bad); border: 1px solid var(--line); }
+  .err { color: var(--bad); font-size: 14px; min-height: 20px; }
+
+  :focus-visible { outline: 3px solid var(--water); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Garden</h1>
+    <span class="pill"><span class="dot" id="connDot"></span><span id="connText">Not set up</span></span>
+    <button class="icon-btn" id="settingsBtn" aria-label="Connection settings">⚙︎</button>
+  </header>
+
+  <div class="hero">
+    <button class="dial" id="dial" disabled aria-live="polite">
+      <svg viewBox="0 0 228 228" aria-hidden="true">
+        <circle class="track" cx="114" cy="114" r="106" fill="none" stroke-width="8"/>
+        <circle class="prog" id="ring" cx="114" cy="114" r="106" fill="none" stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="666" stroke-dashoffset="666"/>
+      </svg>
+      <span class="face">
+        <span class="big" id="dialBig">Water</span>
+        <span class="small" id="dialSmall">3 min</span>
+      </span>
+    </button>
+    <div class="hero-note" id="heroNote"></div>
+    <div class="slider">
+      <div class="slider-head"><span>Run for</span><strong id="waterLabel">3 min</strong></div>
+      <input type="range" id="waterSlider" min="15" max="600" step="15" value="180" aria-label="Watering duration">
+    </div>
+  </div>
+
+  <section class="feed">
+    <h2>Nutrient feed</h2>
+    <div class="feed-row">
+      <div class="slider">
+        <div class="slider-head"><span>Dose</span><strong id="feedLabel">10 s</strong></div>
+        <input type="range" id="feedSlider" min="1" max="120" step="1" value="10" aria-label="Feed duration">
+      </div>
+      <button class="btn btn-feed" id="feedBtn" disabled>Feed</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Soil moisture</h2>
+    <div class="pots" id="pots"><div class="empty">Waiting for the controller to report.</div></div>
+  </section>
+
+  <section>
+    <h2>Weather</h2>
+    <div id="weather"><div class="empty">Waiting for the controller to report.</div></div>
+  </section>
+
+  <section>
+    <h2>Plant camera</h2>
+    <div id="camAdvice"><div class="empty">No check yet.</div></div>
+    <div class="cam-row">
+      <button class="btn btn-cam" id="camCheckBtn" disabled>Check now</button>
+      <button class="btn btn-cam-quiet" id="camUpdateBtn" disabled>Update</button>
+    </div>
+    <div class="cam-note"><span id="camNote" aria-live="polite"></span><button class="link-btn" id="camCancel" hidden>Cancel</button></div>
+  </section>
+
+  <footer id="footer">
+    <span>Scheduled watering runs every evening.</span>
+  </footer>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h2>Connect to your garden</h2>
+    <p>These details are saved on this phone only.</p>
+    <label>Cluster URL
+      <input id="fHost" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="abc123.s1.eu.hivemq.cloud" required>
+    </label>
+    <label>Username
+      <input id="fUser" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    </label>
+    <label>Password
+      <input id="fPass" type="password" autocomplete="current-password" required>
+    </label>
+    <div class="err" id="fErr"></div>
+    <div class="dialog-actions">
+      <button class="btn btn-quiet" type="button" id="forgetBtn">Forget</button>
+      <button class="btn btn-primary" type="submit" id="saveBtn">Save and connect</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const T = {
+    pumpCmd: 'garden/pump/cmd', pumpState: 'garden/pump/state',
+    feedCmd: 'garden/nutrient/cmd', feedState: 'garden/nutrient/state',
+    online: 'garden/online', status: 'garden/status',
+    camTrigger: 'garden/camera/trigger', camStatus: 'garden/camera/status', camAdvice: 'garden/camera/advice'
+  };
+  const RING = 2 * Math.PI * 106;
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const store = {
+    get: k => { try { return localStorage.getItem('garden.' + k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem('garden.' + k, v); } catch (e) {} },
+    del: k => { try { localStorage.removeItem('garden.' + k); } catch (e) {} }
+  };
+
+  const s = {
+    conn: 'setup', connErr: '',
+    online: null, pump: null, feed: null, status: null, statusAt: 0,
+    pumpEnds: 0, pumpTotal: 0, feedEnds: 0,
+    pumpPending: 0, feedPending: 0,
+    cam: null, camAdvice: null, camTrigger: ''
+  };
+  let client = null;
+
+  const fmtDur = sec => sec < 60 ? sec + ' s' : (sec % 60 ? Math.floor(sec / 60) + ' min ' + (sec % 60) + ' s' : (sec / 60) + ' min');
+  const fmtClock = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+  const cleanHost = h => h.trim().replace(/^[a-z]+:\/\//i, '').replace(/[:\/].*$/, '');
+
+  // ---------- Sliders (remembered on this device) ----------
+  const waterSlider = $('waterSlider'), feedSlider = $('feedSlider');
+  waterSlider.value = store.get('waterSec') || 180;
+  feedSlider.value = store.get('feedSec') || 10;
+  waterSlider.addEventListener('input', () => { store.set('waterSec', waterSlider.value); render(); });
+  feedSlider.addEventListener('input', () => { store.set('feedSec', feedSlider.value); render(); });
+
+  // ---------- MQTT ----------
+  function connect() {
+    const host = store.get('host'), user = store.get('user'), pass = store.get('pass');
+    if (!host || !user || !pass) { s.conn = 'setup'; render(); openSettings(); return; }
+    if (client) { client.end(true); client = null; }
+    s.conn = 'connecting'; s.connErr = ''; render();
+
+    client = mqtt.connect('wss://' + host + ':8884/mqtt', {
+      username: user, password: pass,
+      clientId: 'garden-web-' + Math.random().toString(16).slice(2, 10),
+      clean: true, reconnectPeriod: 5000, connectTimeout: 10000, keepalive: 30
+    });
+
+    client.on('connect', () => {
+      s.conn = 'connected'; s.connErr = '';
+      client.subscribe('garden/#', { qos: 0 });
+      render();
+    });
+    client.on('reconnect', () => { if (s.conn !== 'error') { s.conn = 'connecting'; render(); } });
+    client.on('offline', () => { if (s.conn !== 'error') { s.conn = 'connecting'; render(); } });
+    client.on('error', err => {
+      const msg = String(err && err.message || err);
+      if ((err && (err.code === 4 || err.code === 5 || err.code === 134 || err.code === 135)) || /authori|bad user/i.test(msg)) {
+        s.conn = 'error';
+        s.connErr = 'Username or password was rejected.';
+        client.end(true);
+      }
+      render();
+    });
+    client.on('message', (topic, payload) => {
+      const text = new TextDecoder().decode(payload);
+      if (topic === T.online) s.online = text;
+      else if (topic === T.pumpState) {
+        s.pump = text; s.pumpPending = 0;
+        if (text !== 'running') { s.pumpEnds = 0; s.pumpTotal = 0; }
+      } else if (topic === T.feedState) {
+        s.feed = text; s.feedPending = 0;
+        if (text !== 'running') s.feedEnds = 0;
+      } else if (topic === T.status) {
+        try { s.status = JSON.parse(text); s.statusAt = Date.now(); } catch (e) {}
+      } else if (topic === T.camStatus) {
+        try { s.cam = JSON.parse(text); } catch (e) {}
+      } else if (topic === T.camAdvice) {
+        try { s.camAdvice = JSON.parse(text); } catch (e) {}
+      } else if (topic === T.camTrigger) {
+        s.camTrigger = text.trim();
+      }
+      render();
+    });
+  }
+
+  function send(topic, msg) {
+    if (!client || !client.connected) return false;
+    client.publish(topic, msg, { qos: 1, retain: false });
+    return true;
+  }
+
+  // The camera is asleep most of the time, so its requests are retained
+  // until it wakes up and clears them.
+  function sendRetained(topic, msg) {
+    if (!client || !client.connected) return false;
+    client.publish(topic, msg, { qos: 1, retain: true });
+    return true;
+  }
+
+  // ---------- Actions ----------
+  $('dial').addEventListener('click', () => {
+    if (s.pump === 'running') {
+      if (send(T.pumpCmd, 'STOP')) { s.pumpPending = Date.now(); render(); }
+    } else {
+      const sec = +waterSlider.value;
+      if (send(T.pumpCmd, 'RUN:' + sec)) {
+        s.pumpPending = Date.now(); s.pumpEnds = Date.now() + sec * 1000; s.pumpTotal = sec * 1000; render();
+      }
+    }
+  });
+
+  $('feedBtn').addEventListener('click', () => {
+    if (s.feed === 'running') {
+      if (send(T.feedCmd, 'STOP')) { s.feedPending = Date.now(); render(); }
+    } else {
+      const sec = +feedSlider.value;
+      if (send(T.feedCmd, 'RUN:' + sec)) { s.feedPending = Date.now(); s.feedEnds = Date.now() + sec * 1000; render(); }
+    }
+  });
+
+  $('camCheckBtn').addEventListener('click', () => {
+    if (s.camTrigger) return;   // already waiting - repeat taps do nothing
+    if (sendRetained(T.camTrigger, 'check')) { s.camTrigger = 'check'; render(); }
+  });
+
+  $('camCancel').addEventListener('click', () => {
+    if (sendRetained(T.camTrigger, '')) { s.camTrigger = ''; render(); }
+  });
+
+  $('camUpdateBtn').addEventListener('click', () => {
+    if (sendRetained(T.camTrigger, 'update')) { s.camTrigger = 'update'; render(); }
+  });
+
+  // ---------- Settings ----------
+  const dlg = $('settings');
+  function openSettings() {
+    $('fHost').value = store.get('host') || '';
+    $('fUser').value = store.get('user') || '';
+    $('fPass').value = store.get('pass') || '';
+    $('fErr').textContent = s.connErr;
+    if (!dlg.open) dlg.showModal();
+  }
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('settingsForm').addEventListener('submit', e => {
+    const host = cleanHost($('fHost').value);
+    if (!/\.hivemq\.cloud$/i.test(host)) {
+      e.preventDefault();
+      $('fErr').textContent = 'The cluster URL should end in .hivemq.cloud';
+      return;
+    }
+    store.set('host', host);
+    store.set('user', $('fUser').value.trim());
+    store.set('pass', $('fPass').value);
+    connect();
+  });
+  $('forgetBtn').addEventListener('click', () => {
+    ['host', 'user', 'pass'].forEach(store.del);
+    if (client) { client.end(true); client = null; }
+    s.conn = 'setup'; s.online = s.pump = s.feed = s.status = null;
+    s.cam = s.camAdvice = null; s.camTrigger = '';
+    $('fHost').value = $('fUser').value = $('fPass').value = '';
+    $('fErr').textContent = 'Details removed from this phone.';
+    render();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && client && !client.connected && s.conn !== 'error') client.reconnect();
+  });
+
+  // ---------- Render ----------
+  const weatherIcon = d => {
+    d = (d || '').toLowerCase();
+    if (d.includes('thunder')) return '⛈️';
+    if (d.includes('snow')) return '❄️';
+    if (d.includes('shower')) return '🌦️';
+    if (d.includes('rain') || d.includes('drizzle')) return '🌧️';
+    if (d.includes('fog')) return '🌫️';
+    if (d.includes('overcast')) return '☁️';
+    if (d.includes('partly')) return '⛅';
+    if (d.includes('clear')) return '☀️';
+    return '';
+  };
+
+  function render() {
+    const now = Date.now();
+    const live = s.conn === 'connected';
+    const deviceUp = live && s.online === 'online';
+
+    // Connection pill
+    const dot = $('connDot'), txt = $('connText');
+    dot.className = 'dot';
+    if (s.conn === 'setup') { txt.textContent = 'Not set up'; }
+    else if (s.conn === 'error') { dot.classList.add('bad'); txt.textContent = 'Login failed'; }
+    else if (s.conn === 'connecting') { dot.classList.add('wait'); txt.textContent = 'Connecting'; }
+    else if (s.online === 'online') { dot.classList.add('ok'); txt.textContent = 'Garden online'; }
+    else if (s.online === 'offline') { dot.classList.add('bad'); txt.textContent = 'Controller offline'; }
+    else { dot.classList.add('wait'); txt.textContent = 'Looking for garden'; }
+
+    // Sliders
+    $('waterLabel').textContent = fmtDur(+waterSlider.value);
+    $('feedLabel').textContent = fmtDur(+feedSlider.value);
+
+    // Dial
+    const dial = $('dial'), ring = $('ring'), note = $('heroNote');
+    const running = s.pump === 'running';
+    dial.disabled = !deviceUp;
+    dial.classList.toggle('running', running);
+    note.classList.remove('warn');
+    note.textContent = '';
+
+    if (running) {
+      const known = s.pumpEnds > now;
+      dial.classList.toggle('indeterminate', !known);
+      $('dialBig').textContent = known ? fmtClock(s.pumpEnds - now) : 'On';
+      $('dialSmall').textContent = 'Tap to stop';
+      ring.style.strokeDashoffset = known ? RING * (1 - (s.pumpEnds - now) / s.pumpTotal) : RING * 0.75;
+      dial.setAttribute('aria-label', 'Watering. Tap to stop.');
+    } else {
+      dial.classList.remove('indeterminate');
+      $('dialBig').textContent = 'Water';
+      $('dialSmall').textContent = fmtDur(+waterSlider.value);
+      ring.style.strokeDashoffset = RING;
+      dial.setAttribute('aria-label', 'Water now for ' + fmtDur(+waterSlider.value));
+    }
+
+    if (s.pumpPending) {
+      const waited = now - s.pumpPending;
+      if (waited > 8000) { note.textContent = 'No reply from the garden. Check the controller is powered and online.'; note.classList.add('warn'); }
+      else note.textContent = 'Sending to the garden';
+    } else if (live && s.online === 'offline') {
+      note.textContent = 'The controller has dropped off the internet. Buttons return when it reconnects.';
+      note.classList.add('warn');
+    } else if (s.conn === 'error') {
+      note.textContent = 'Open settings to check your username and password.';
+      note.classList.add('warn');
+    }
+
+    // Feed
+    const fb = $('feedBtn');
+    const feeding = s.feed === 'running';
+    fb.disabled = !deviceUp;
+    fb.classList.toggle('running', feeding);
+    if (feeding) fb.textContent = s.feedEnds > now ? 'Stop ' + Math.ceil((s.feedEnds - now) / 1000) + ' s' : 'Stop feed';
+    else fb.textContent = s.feedPending && now - s.feedPending < 8000 ? 'Sending' : 'Feed';
+
+    // Pots
+    const st = s.status;
+    const pots = $('pots');
+    if (st && Array.isArray(st.pots) && st.pots.length) {
+      pots.innerHTML = st.pots.map(p => {
+        const m = Math.max(0, Math.min(100, Math.round(p.moisture)));
+        const stale = p.ageMin > 120;
+        const age = stale ? 'No reading for ' + Math.round(p.ageMin / 60) + ' h' : (p.battery != null ? (+p.battery).toFixed(2) + ' V' : '');
+        return '<div class="pot' + (stale ? ' stale' : '') + '"><div class="gauge"><span style="height:' + m + '%"></span></div>' +
+               '<b>' + m + '%</b>Pot ' + p.id + '<br>' + age + '</div>';
+      }).join('');
+    } else if (st) {
+      pots.innerHTML = '<div class="empty">No soil sensors are reporting yet.</div>';
+    }
+
+    // Weather
+    const w = $('weather');
+    if (st && st.tempC != null) {
+      const rainTip = (st.rainChance >= 60 || st.rainMm >= 3)
+        ? '<div class="rain-tip">Rain is due today (' + (+st.rainMm).toFixed(1) + ' mm). You could skip tonight\'s watering.</div>' : '';
+      w.innerHTML = '<div class="weather"><span class="temp">' + Math.round(st.tempC) + '°</span>' +
+        '<span><div class="sky">' + weatherIcon(st.weather) + ' ' + (st.weather || '') + '</div>' +
+        '<div class="rain">' + Math.round(st.rainChance) + '% chance of rain</div></span></div>' + rainTip;
+    } else if (st) {
+      w.innerHTML = '<div class="empty">The controller has no weather data right now.</div>';
+    }
+
+    // Plant camera
+    const ca = s.camAdvice;
+    if (ca) {
+      $('camAdvice').innerHTML = '<div class="cam-advice"><span class="score">' + esc(ca.health || '–') + '<small>/10</small></span>' +
+        '<span><div>Water: ' + esc(ca.water) + ' · Feed: ' + esc(ca.feed) + '</div>' +
+        '<div class="meta">' + esc(ca.date) + (ca.time ? ' ' + esc(ca.time) : '') + ' · ' + esc(ca.confidence) + ' confidence</div></span></div>';
+    }
+    const pending = s.camTrigger;
+    const cb = $('camCheckBtn'), ub = $('camUpdateBtn');
+    cb.disabled = !live || !!pending;
+    ub.disabled = !live || !!pending;
+    cb.textContent = pending === 'check' ? 'Waiting…' : 'Check now';
+    $('camCancel').hidden = !pending;
+    let camNote = '';
+    if (pending === 'check') camNote = 'Waiting for the camera to wake (up to 15 min). The advice will arrive on ntfy.';
+    else if (pending === 'update') camNote = 'Waiting for the camera to wake. ntfy will tell you when the update window opens.';
+    else if (s.cam) camNote = 'Camera ' + s.cam.state + ' · last seen ' + s.cam.time + ' · last check ' + s.cam.last_check + (s.cam.fw ? ' · v' + s.cam.fw : '');
+    else if (live) camNote = 'No word from the camera yet.';
+    $('camNote').textContent = camNote;
+
+    // Footer
+    const f = [];
+    if (st && st.nextWatering) f.push('Scheduled watering at ' + st.nextWatering + ' for ' + fmtDur(st.waterDurationS) + '.');
+    if (st && st.rssi != null) f.push('WiFi signal ' + st.rssi + ' dBm, up ' + (+st.uptimeH).toFixed(1) + ' h.');
+    if (s.statusAt) {
+      const d = new Date(s.statusAt);
+      f.push('Last report received ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.');
+    }
+    if (f.length) $('footer').innerHTML = f.map(x => '<span>' + x + '</span>').join('');
+  }
+
+  setInterval(render, 1000);
+  render();
+  if (typeof mqtt === 'undefined') {
+    $('connText').textContent = 'Offline';
+    $('heroNote').textContent = 'The page could not load its connection library. Check your internet connection and reload.';
+  } else {
+    connect();
+  }
+})();
+</script>
+</body>
+</html>
